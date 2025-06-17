@@ -23,8 +23,8 @@ class TriggerType(str, Enum):
 
 
 class TriggerDto(BaseModel):
-    trigger_type: TriggerType
-    trigger_value: str
+    triggerType: TriggerType
+    triggerValue: str
 
 
 class NoteDto(BaseModel):
@@ -58,4 +58,4 @@ class TextBasedHintRequest(BaseModel):
 
 class TextBasedHintResponse(BaseModel):
     note: NoteDto
-    hint_text: str
+    hintText: str

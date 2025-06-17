@@ -21,7 +21,7 @@ class HintsGenerationService:
         }
         self.time_format = "%Y-%m-%d %H:%M"
 
-    def generate_time_hint(self, request: TextBasedHintRequest) -> Optional[TextBasedHintResponse]:
+    async def generate_time_hint(self, request: TextBasedHintRequest) -> Optional[TextBasedHintResponse]:
         """Генерирует подсказку на основе временных паттернов"""
         time_notes = request.context
 
@@ -36,7 +36,13 @@ class HintsGenerationService:
         pattern = patterns[best_category]
 
         # Формируем новую NoteDto для подсказки
-        return self._build_hint_note(best_category, pattern, request.current_time)
+        hint = self._build_hint_note(best_category, pattern, request.current_time)
+
+        # Дополнительная обработка через YandexGPT
+        enhanced_hint_text = await self.generate_hint_by_note(hint.note, request.current_time)
+        hint.hintText = enhanced_hint_text
+
+        return hint
 
     def _analyze_time_patterns(self, notes: List[NoteDto]) -> Dict[CategoryType, Dict]:
         """Выявляет временные паттерны по категориям"""
@@ -44,9 +50,9 @@ class HintsGenerationService:
 
         for note in notes:
             for trigger in note.triggers:
-                if trigger.trigger_type == TriggerType.TIME:
+                if trigger.triggerType == TriggerType.TIME:
                     try:
-                        time = datetime.strptime(trigger.trigger_value, self.time_format).time()
+                        time = datetime.strptime(trigger.triggerValue, self.time_format).time()
                         patterns[note.categoryType]["times"].append(time)
                         patterns[note.categoryType]["count"] += 1
                     except ValueError:
@@ -66,7 +72,6 @@ class HintsGenerationService:
         current_time = datetime.strptime(current_time_str, self.time_format)
         avg_time = datetime.strptime(pattern["avg_time"], "%H:%M").time()
 
-        # Определяем текст в зависимости от категории
         hint_texts = {
             CategoryType.SHOPPING: "Вы обычно делаете покупки около {time}",
             CategoryType.CALL: "В это время вы часто звоните {time}",
@@ -76,7 +81,6 @@ class HintsGenerationService:
 
         hint_text = hint_texts.get(category, "Рекомендуемое время - {time}").format(time=pattern["avg_time"])
 
-        # Создаем триггер на среднее время
         trigger_time = current_time.replace(
             hour=avg_time.hour,
             minute=avg_time.minute
@@ -89,14 +93,14 @@ class HintsGenerationService:
                 updatedAt=current_time_str,
                 categoryType=category,
                 triggers=[TriggerDto(
-                    trigger_type=TriggerType.TIME,
-                    trigger_value=trigger_time
+                    triggerType=TriggerType.TIME,
+                    triggerValue=trigger_time
                 )]
             ),
-            hint_text=hint_text
+            hintText=hint_text
         )
 
-    async def generate_hint_by_note(self, options: NoteDto, ) -> str:
+    async def generate_hint_by_note(self, note: NoteDto, current_time) -> str:
         """Постобработка предложенной заметки с помощью API YandexGPT"""
         if not IAM or not FOLDER_ID:
             raise HTTPException(
@@ -104,7 +108,7 @@ class HintsGenerationService:
                 detail="API key for AI service (text) is not configured"
             )
 
-        system_prompt = self.build_prompt()
+        system_prompt = self.build_prompt(current_time)
 
         request_data = {
             "modelUri": f"gpt://{FOLDER_ID}/yandexgpt-lite",
@@ -120,7 +124,7 @@ class HintsGenerationService:
                 },
                 {
                     "role": "user",
-                    "text": f"Ввод: \n {options}" # сюда надо пихануть строку с NoteDto в JSON формате
+                    "text": f"Ввод: \n {note}" # сюда надо пихануть строку с NoteDto в JSON формате
                 }
             ]
         }
