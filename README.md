@@ -120,6 +120,30 @@ Input:
           "triggerValue": "2025-06-23 17:00"
         }
       ]
+    },
+    {
+      "text": "Отчет по работе",
+      "createdAt": "2025-06-25 09:23",
+      "updatedAt": "2025-06-25 09:23",
+      "categoryType": "Deadline",
+      "triggers": [
+        {
+          "triggerType": "Time",
+          "triggerValue": "2025-06-23 17:00"
+        }
+      ]
+    },
+    {
+      "text": "Сделать отчет",
+      "createdAt": "2025-06-27 10:17",
+      "updatedAt": "2025-06-27 10:17",
+      "categoryType": "Deadline",
+      "triggers": [
+        {
+          "triggerType": "Time",
+          "triggerValue": "2025-06-23 18:00"
+        }
+      ]
     }
   ],
   "current_time": "2025-06-25 10:00"
