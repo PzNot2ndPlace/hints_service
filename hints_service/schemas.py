@@ -1,7 +1,7 @@
 from enum import Enum
 from pydantic import BaseModel, validator
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 
 class CategoryType(str, Enum):
@@ -30,12 +30,22 @@ class TriggerDto(BaseModel):
 class NoteDto(BaseModel):
     text: str
     createdAt: str
-    updatedAt: str
+    updatedAt: Optional[str] = None  # Поле может быть null
     categoryType: CategoryType
     triggers: List[TriggerDto]
 
-    @validator("createdAt", "updatedAt")
-    def validate_time(cls, v):
+    @validator("createdAt")
+    def validate_created_at(cls, v):
+        try:
+            datetime.strptime(v, "%Y-%m-%d %H:%M")
+            return v
+        except ValueError:
+            raise ValueError("Некорректный формат времени. Используйте 'YYYY-MM-DD HH:MM'")
+
+    @validator("updatedAt")
+    def validate_updated_at(cls, v):
+        if v is None:
+            return v
         try:
             datetime.strptime(v, "%Y-%m-%d %H:%M")
             return v

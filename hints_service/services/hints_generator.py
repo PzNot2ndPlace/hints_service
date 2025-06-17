@@ -39,8 +39,8 @@ class HintsGenerationService:
         hint = self._build_hint_note(best_category, pattern, request.current_time)
 
         # Дополнительная обработка через YandexGPT
-        enhanced_hint_text = await self.generate_hint_by_note(hint.note, request.current_time)
-        hint.hintText = enhanced_hint_text
+        # enhanced_hint_text = await self.generate_hint_by_note(hint.note, request.current_time)
+        # hint.hintText = enhanced_hint_text
 
         return hint
 
@@ -72,6 +72,13 @@ class HintsGenerationService:
         current_time = datetime.strptime(current_time_str, self.time_format)
         avg_time = datetime.strptime(pattern["avg_time"], "%H:%M").time()
 
+        reminder_texts = {
+            CategoryType.SHOPPING: "Сделать покупки",
+            CategoryType.CALL: "Позвонить",
+            CategoryType.HEALTH: "Принять лекарства",
+            CategoryType.ROUTINE: "Выполнить рутинное дело"
+        }
+
         hint_texts = {
             CategoryType.SHOPPING: "Вы обычно делаете покупки около {time}",
             CategoryType.CALL: "В это время вы часто звоните {time}",
@@ -79,36 +86,44 @@ class HintsGenerationService:
             CategoryType.ROUTINE: "Обычно вы это делаете около {time}"
         }
 
-        hint_text = hint_texts.get(category, "Рекомендуемое время - {time}").format(time=pattern["avg_time"])
+        # Рассчитываем разницу времени для подсказки
+        trigger_time = current_time.replace(hour=avg_time.hour, minute=avg_time.minute)
+        time_diff = trigger_time - current_time
+        hours = time_diff.seconds // 3600
 
-        trigger_time = current_time.replace(
-            hour=avg_time.hour,
-            minute=avg_time.minute
-        ).strftime(self.time_format)
+        original_reminder_text = reminder_texts.get(category, "Напоминание")
+        original_hint_text = hint_texts.get(category, "Рекомендуемое время - {time}").format(time=pattern["avg_time"])
+
+        # Расширенная подсказка с временем
+        extended_hint = f"{original_hint_text}. Напомнить через {hours} часов?"
 
         return TextBasedHintResponse(
             note=NoteDto(
-                text=hint_text,
+                text=original_reminder_text,
                 createdAt=current_time_str,
-                updatedAt=current_time_str,
+                updatedAt=None,
                 categoryType=category,
                 triggers=[TriggerDto(
                     triggerType=TriggerType.TIME,
-                    triggerValue=trigger_time
+                    triggerValue=trigger_time.strftime(self.time_format)
                 )]
             ),
-            hintText=hint_text
+            hintText=extended_hint
         )
 
     async def generate_hint_by_note(self, note: NoteDto, current_time) -> str:
         """Постобработка предложенной заметки с помощью API YandexGPT"""
-        if not IAM or not FOLDER_ID:
-            raise HTTPException(
-                status_code=500,
-                detail="API key for AI service (text) is not configured"
-            )
 
-        system_prompt = self.build_prompt(current_time)
+        note_dict = {
+            "text": note.text,
+            "createdAt": note.createdAt,
+            "updatedAt": note.updatedAt,
+            "categoryType": note.categoryType,
+            "triggers": [{
+                "triggerType": t.triggerType,
+                "triggerValue": t.triggerValue
+            } for t in note.triggers]
+        }
 
         request_data = {
             "modelUri": f"gpt://{FOLDER_ID}/yandexgpt-lite",
@@ -120,11 +135,11 @@ class HintsGenerationService:
             "messages": [
                 {
                     "role": "system",
-                    "text": system_prompt
+                    "text": self.build_prompt(current_time)
                 },
                 {
                     "role": "user",
-                    "text": f"Ввод: \n {note}" # сюда надо пихануть строку с NoteDto в JSON формате
+                    "text": f"Ввод: \n{note_dict}"
                 }
             ]
         }
