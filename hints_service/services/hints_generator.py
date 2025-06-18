@@ -1,6 +1,6 @@
 from collections import defaultdict
-from datetime import time, datetime
-from typing import Optional, Dict, List
+from datetime import time
+from typing import Dict
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -127,19 +127,26 @@ class HintsGenerationService:
 
     def _build_hint_from_group(self, group: List[NoteDto], current_time: str) -> TextBasedHintResponse:
         """Создает подсказку на основе группы заметок"""
+
         time_pattern = self._analyze_group_time_pattern(group)
         category = group[0].categoryType
         reminder_text = group[0].text
+        current_dt = datetime.strptime(current_time, self.time_format)
+
+        # Вычисляем рекомендуемое время триггера
+        trigger_time = current_dt.replace(
+            hour=time_pattern['avg_trigger'].hour,
+            minute=time_pattern['avg_trigger'].minute
+        )
+
+        # Если триггерное время уже прошло, переносим на следующий день
+        if trigger_time <= current_dt:
+            trigger_time = trigger_time.replace(day=trigger_time.day + 1)
 
         hint_text = (
             f"Вы часто напоминаете себе '{reminder_text}' (найдено {len(group)} похожих напоминаний). "
             f"Обычно вы создаёте такие напоминания около {time_pattern['avg_creation'].strftime('%H:%M')}, "
             f"а срабатывают они в {time_pattern['avg_trigger'].strftime('%H:%M')}."
-        )
-
-        trigger_time = datetime.strptime(current_time, self.time_format).replace(
-            hour=time_pattern['avg_trigger'].hour,
-            minute=time_pattern['avg_trigger'].minute
         )
 
         return TextBasedHintResponse(
