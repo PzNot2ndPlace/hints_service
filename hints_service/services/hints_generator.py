@@ -26,8 +26,8 @@ class HintsGenerationService:
         self.vectorizer = TfidfVectorizer(
             analyzer='word',
             token_pattern=r'\w+',
-            min_df=0.1,  # Игнорируем слишком редкие слова
-            max_df=0.9  # Игнорируем слишком частые слова
+            min_df=0.1,
+            max_df=0.9
         )
         self.similarity_threshold = 0.7  # Порог для группировки заметок
         self._fit_vectorizer = False
@@ -51,7 +51,7 @@ class HintsGenerationService:
         """Группировка заметок с использованием TF-IDF"""
         grouped = defaultdict(list)
 
-        # Собираем все тексты для обучения
+        # Собираем все тексты для "обучения" TF-IDF
         if not self._fit_vectorizer:
             all_texts = [n.text for n in notes]
             self.vectorizer.fit(all_texts)
@@ -60,6 +60,7 @@ class HintsGenerationService:
         for category in CategoryType:
             category_notes = [n for n in notes if n.categoryType == category]
 
+            # Скипаем категории в которых мало заметок
             if len(category_notes) < 2:
                 continue
 
@@ -67,7 +68,7 @@ class HintsGenerationService:
             texts = [n.text for n in category_notes]
             tfidf_matrix = self.vectorizer.transform(texts)
 
-            # Вычисляем матрицу сходства
+            # Считаем косинусное сходство (матрицу)
             sim_matrix = cosine_similarity(tfidf_matrix)
 
             # Группируем похожие заметки
