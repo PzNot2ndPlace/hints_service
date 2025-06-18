@@ -166,7 +166,6 @@ class HintsGenerationService:
             )]
         )
 
-        # Добавляем await перед вызовом асинхронного метода
         hint_text = await self.generate_hint_by_note(hint_note, current_time)
 
         return TextBasedHintResponse(
