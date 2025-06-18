@@ -1,15 +1,27 @@
 from collections import defaultdict
 from datetime import time
 from typing import Dict
+
+import httpx
 import numpy as np
+from fastapi import HTTPException
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from hints_service.schemas import *
+from hints_service.constants import *
 
 
 class HintsGenerationService:
     def __init__(self):
+        if not IAM or not FOLDER_ID:
+            print("Warning: IAM or FOLDER_ID not set")
+        self.ygpt_url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+        self.ygpt_headers = {
+            "Authorization": f"Bearer {IAM}",
+            "x-folder-id": FOLDER_ID,
+            "Content-Type": "application/json"
+        }
         self.time_format = "%Y-%m-%d %H:%M"
         self.vectorizer = TfidfVectorizer(
             analyzer='word',
@@ -33,7 +45,7 @@ class HintsGenerationService:
         if not best_group:
             return None
 
-        return self._build_hint_from_group(best_group, request.current_time)
+        return await self._build_hint_from_group(best_group, request.current_time)
 
     def _group_similar_notes(self, notes: List[NoteDto]) -> Dict[CategoryType, List]:
         """Группировка заметок с использованием TF-IDF"""
@@ -125,9 +137,8 @@ class HintsGenerationService:
 
         return time_factor * count_factor
 
-    def _build_hint_from_group(self, group: List[NoteDto], current_time: str) -> TextBasedHintResponse:
+    async def _build_hint_from_group(self, group: List[NoteDto], current_time: str) -> TextBasedHintResponse:
         """Создает подсказку на основе группы заметок"""
-
         time_pattern = self._analyze_group_time_pattern(group)
         category = group[0].categoryType
         reminder_text = group[0].text
@@ -143,23 +154,22 @@ class HintsGenerationService:
         if trigger_time <= current_dt:
             trigger_time = trigger_time.replace(day=trigger_time.day + 1)
 
-        hint_text = (
-            f"Вы часто напоминаете себе '{reminder_text}' (найдено {len(group)} похожих напоминаний). "
-            f"Обычно вы создаёте такие напоминания около {time_pattern['avg_creation'].strftime('%H:%M')}, "
-            f"а срабатывают они в {time_pattern['avg_trigger'].strftime('%H:%M')}."
+        hint_note = NoteDto(
+            text=reminder_text,
+            createdAt=current_time,
+            updatedAt=None,
+            categoryType=category,
+            triggers=[TriggerDto(
+                triggerType=TriggerType.TIME,
+                triggerValue=trigger_time.strftime(self.time_format)
+            )]
         )
 
+        # Добавляем await перед вызовом асинхронного метода
+        hint_text = await self.generate_hint_by_note(hint_note, current_time)
+
         return TextBasedHintResponse(
-            note=NoteDto(
-                text=reminder_text,
-                createdAt=current_time,
-                updatedAt=None,
-                categoryType=category,
-                triggers=[TriggerDto(
-                    triggerType=TriggerType.TIME,
-                    triggerValue=trigger_time.strftime(self.time_format)
-                )]
-            ),
+            note=hint_note,
             hintText=hint_text
         )
 
@@ -169,6 +179,123 @@ class HintsGenerationService:
         total_seconds = sum(t.hour * 3600 + t.minute * 60 for t in times)
         avg_seconds = total_seconds // len(times)
         return time(hour=avg_seconds // 3600, minute=(avg_seconds % 3600) // 60)
+
+    async def generate_hint_by_note(self, note: NoteDto, current_time) -> str:
+        """Постобработка предложенной заметки с помощью API YandexGPT"""
+
+        note_dict = {
+            "text": note.text,
+            "createdAt": note.createdAt,
+            "updatedAt": note.updatedAt,
+            "categoryType": note.categoryType,
+            "triggers": [{
+                "triggerType": t.triggerType,
+                "triggerValue": t.triggerValue
+            } for t in note.triggers]
+        }
+
+        request_data = {
+            "modelUri": f"gpt://{FOLDER_ID}/yandexgpt-lite",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.1,
+                "maxTokens": 1000
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "text": self.build_prompt(current_time)
+                },
+                {
+                    "role": "user",
+                    "text": f"Ввод: \n{note_dict}"
+                }
+            ]
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self.ygpt_url,
+                    headers=self.ygpt_headers,
+                    json=request_data
+                )
+                response.raise_for_status()
+
+                result = response.json()
+                llm_output = result['result']['alternatives'][0]['message']['text']
+
+                print(llm_output)
+
+                return llm_output
+
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"YandexGPT API error: {e.response.text}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Text processing failed: {str(e)}"
+            )
+
+    @staticmethod
+    def build_prompt(current_time: str) -> str:
+        return f"""
+        Ты — AI-ассистент для создания "умных" подсказок. Ты получаешь напоминание в JSON формате, \
+        которое нужно предложить пользователю, учитывая его текущее время: {current_time}.
+        Возвращай подсказку одним односложным предложением.
+
+        ### Допустимые значения:
+        - `categoryType`: Time, Location, Event, Shopping, Call, Meeting, Deadline, Health, Routine, Other  
+        - `triggerType`: Time, Location
+
+        ### Правила:
+        1. `categoryType` определяется по смыслу напоминания:
+           - "купить молоко" → Shopping  
+           - "позвонить маме" → Call  
+           - "встреча в кафе" → Meeting  
+        2. `triggerType` зависит от условия:
+           - "в 18:00" → Time 
+           - "через 2 часа" → Time
+           - "когда буду в Пятёрочке" → Location  
+        3. Для относительного времени (e.g., "завтра", "через час") \
+        всегда указывай абсолютное время в формате "YYYY-MM-DD HH:MM".
+
+        ### Пример 1 (с текущим временем {current_time} = "2025-06-16 15:00"):
+        Ввод: 
+        {{
+            "text": "Выгулять собаку",
+            "categoryType": "Routine",
+            "triggers": [
+                {{
+                    "triggerType": "Time",
+                    "triggerValue": "2025-06-16 18:00"
+                }}
+            ]
+        }}
+        Вывод:
+        Напомнить выгулять собаку через 3 часа?
+
+        ### Пример 2 (с текущим временем {current_time} = "2025-06-16 09:00"):
+        Ввод:
+        {{
+            "text": "Позвонить врачу",
+            "categoryType": "Health",
+            "triggers": [
+                {{
+                    "triggerType": "Time",
+                    "triggerValue": "2025-06-17 10:00"
+                }}
+            ]
+        }}
+        Вывод:
+        Напомнить позвонить врачу завтра в 10:00
+
+        Теперь предложи пользователю подсказку для следующего напоминания в формате JSON \
+        (текущее время: {current_time}):
+        """
 
 
 hints_generation_service = HintsGenerationService()
